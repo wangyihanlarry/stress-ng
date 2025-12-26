@@ -11,7 +11,7 @@ the various operating system kernel interfaces. Stress-ng features:
   * 370+ stress tests
   * 100+ CPU specific stress tests that exercise floating point, integer,
     bit manipulation and control flow
-  * 60+ virtual memory stress tests
+  * 60+ virtual memory stress tests with precise memory usage control
   * 80+ file system stress tests
   * 50+ memory/CPU cache stress tests
   * portable: builds on Linux (Debian, Devuan, RHEL, Fedora, Centos, Slackware
@@ -270,6 +270,42 @@ NOTE: This can lead to build information being leaked and is not recommended for
 Send patches to colin.i.king@gmail.com or merge requests at
 https://github.com/ColinIanKing/stress-ng
 
+## Precise Memory Control Feature
+
+stress-ng now includes a precise memory control feature that allows you to control system memory usage to a specific percentage and maintain it for a specified duration. This feature is particularly useful for:
+
+* **Controlled Memory Testing**: Test system behavior under specific memory pressure levels
+* **Performance Benchmarking**: Create reproducible memory usage scenarios for performance testing
+* **System Validation**: Verify system stability at different memory utilization levels
+* **macOS and Apple Silicon Support**: Optimized for macOS systems including Apple Silicon M1/M2 chips
+
+### Key Features
+
+* **Precise Control**: Control system memory usage to within 5% of target percentage
+* **Stabilization Detection**: Automatically detects when target memory usage is achieved and stable
+* **Duration Control**: Maintains stable memory usage for a specified time period
+* **Cross-Platform**: Works on Linux, macOS (including Apple Silicon), and other POSIX systems
+* **Real-time Monitoring**: Provides detailed statistics and progress reporting
+* **Safe Operation**: Graceful handling of memory allocation failures and system limits
+
+### Usage
+
+Use the `--vm-precise-percent` and `--vm-precise-duration` options with the vm stressor:
+
+```bash
+# Control system memory to 75% for 30 seconds
+stress-ng --vm 1 --vm-precise-percent 75.0 --vm-precise-duration 30 --timeout 60s
+
+# Control system memory to 60% for 2 minutes
+stress-ng --vm 1 --vm-precise-percent 60.0 --vm-precise-duration 120 --timeout 180s
+```
+
+The feature operates in four phases:
+1. **Initialization**: Sets up memory monitoring and allocation structures
+2. **Stabilization**: Gradually adjusts memory usage to reach the target percentage
+3. **Stable Period**: Maintains target memory usage for the specified duration
+4. **Cleanup**: Releases allocated memory and reports final statistics
+
 ## Quick Start Reference Guide
 The [Ubuntu stress-ng reference guide](https://wiki.ubuntu.com/Kernel/Reference/stress-ng)
 contains a brief overview and worked examples.
@@ -348,6 +384,54 @@ stress-ng: info:  [1171471] sdc        01 Read Error Rate                   8801
 stress-ng: info:  [1171471] sdc        07 Seek Error Rate                   59658169          92
 stress-ng: info:  [1171471] sdc        c3 Hardware ECC Recovered            88015771       71001
 stress-ng: info:  [1171471] sdc        f1 Total LBAs Written               481904395         877
+```
+
+Run precise memory stress testing to control system memory usage to 75% for 30 seconds:
+```
+stress-ng --vm 1 --vm-precise-percent 75.0 --vm-precise-duration 30 --timeout 60s
+stress-ng: info:  [184401] setting to a 1 min run per stressor
+stress-ng: info:  [184401] dispatching hogs: 1 vm
+stress-ng: info:  [184401] vm: precise memory control enabled, target: 75.0%, duration: 30s
+stress-ng: info:  [184401] vm: phase transition: initialization -> stabilization
+stress-ng: info:  [184401] vm: current memory usage: 45.2%, target: 75.0%
+stress-ng: info:  [184401] vm: phase transition: stabilization -> stable period
+stress-ng: info:  [184401] vm: stabilization completed in 8.5s, accuracy: 99.2%
+stress-ng: info:  [184401] vm: phase transition: stable period -> cleanup
+stress-ng: info:  [184401] vm: precise memory control statistics:
+stress-ng: info:  [184401] vm:   target percentage: 75.0%
+stress-ng: info:  [184401] vm:   stabilization time: 8.5s
+stress-ng: info:  [184401] vm:   stable period duration: 30.0s
+stress-ng: info:  [184401] vm:   stable period average usage: 74.8%
+stress-ng: info:  [184401] vm:   overall accuracy: 99.2%
+stress-ng: info:  [184401] vm:   stable period accuracy: 99.7%
+stress-ng: info:  [184401] skipped: 0
+stress-ng: info:  [184401] passed: 1: vm (1)
+stress-ng: info:  [184401] failed: 0
+stress-ng: info:  [184401] successful run completed in 1 min
+```
+
+Run precise memory stress testing with lower target percentage and longer duration:
+```
+stress-ng --vm 1 --vm-precise-percent 60.0 --vm-precise-duration 60 --timeout 120s
+stress-ng: info:  [184402] setting to a 2 mins run per stressor
+stress-ng: info:  [184402] dispatching hogs: 1 vm
+stress-ng: info:  [184402] vm: precise memory control enabled, target: 60.0%, duration: 60s
+stress-ng: info:  [184402] vm: phase transition: initialization -> stabilization
+stress-ng: info:  [184402] vm: current memory usage: 35.1%, target: 60.0%
+stress-ng: info:  [184402] vm: phase transition: stabilization -> stable period
+stress-ng: info:  [184402] vm: stabilization completed in 12.3s, accuracy: 98.8%
+stress-ng: info:  [184402] vm: phase transition: stable period -> cleanup
+stress-ng: info:  [184402] vm: precise memory control statistics:
+stress-ng: info:  [184402] vm:   target percentage: 60.0%
+stress-ng: info:  [184402] vm:   stabilization time: 12.3s
+stress-ng: info:  [184402] vm:   stable period duration: 60.0s
+stress-ng: info:  [184402] vm:   stable period average usage: 59.7%
+stress-ng: info:  [184402] vm:   overall accuracy: 98.8%
+stress-ng: info:  [184402] vm:   stable period accuracy: 99.5%
+stress-ng: info:  [184402] skipped: 0
+stress-ng: info:  [184402] passed: 1: vm (1)
+stress-ng: info:  [184402] failed: 0
+stress-ng: info:  [184402] successful run completed in 2 mins
 stress-ng: info:  [1171471] sdc        f2 Total LBAs Read                 3768039248        5139
 stress-ng: info:  [1171471] sdd        be Temperature Difference             3670049           1
 ```

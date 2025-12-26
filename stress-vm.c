@@ -34,6 +34,9 @@
 #include "core-pragma.h"
 #include "core-prime.h"
 #include "core-vecmath.h"
+#include "core-precise-memory.h"
+
+#include <math.h>
 
 #define MIN_VM_BYTES		(4 * KB)
 #define MAX_VM_BYTES		(MAX_MEM_LIMIT)
@@ -97,6 +100,8 @@ static const stress_help_t help[] = {
 #if defined(MAP_POPULATE)
 	{ NULL,	 "vm-populate",	 "populate (prefault) page tables for a mapping" },
 #endif
+	{ NULL,	 "vm-precise-percent N", "precise memory control: target N% system memory usage" },
+	{ NULL,	 "vm-precise-duration N", "precise memory control: maintain target for N seconds" },
 	{ NULL,	 NULL,		 NULL }
 };
 
@@ -147,6 +152,9 @@ static bool OPTIMIZE3 stress_continue_vm(stress_args_t *args)
 	return (LIKELY(stress_continue_flag()) &&
 	        LIKELY(!args->bogo.max_ops || ((stress_bogo_get(args) >> VM_BOGO_SHIFT) < args->bogo.max_ops)));
 }
+
+/* Forward declaration for precise memory control */
+static int stress_vm_precise(stress_args_t *args, double target_percent, uint64_t duration_seconds);
 
 #define SET_AND_TEST(ptr, val, bit_errors)	\
 do {						\
@@ -3707,8 +3715,42 @@ static int stress_vm(stress_args_t *args)
 	size_t vm_method = 0;
 	size_t vm_total = DEFAULT_VM_BYTES;
 	stress_vm_context_t context;
+	double vm_precise_percent = 0.0;
+	uint64_t vm_precise_duration = 0;
+	bool use_precise_mode = false;
+	char *vm_precise_percent_str = NULL;
 
 	(void)shim_memset(&context, 0, sizeof(context));
+	stress_vm_get_cache_line_size();
+
+	/* Check for precise memory control parameters */
+	if (stress_get_setting("vm-precise-percent", &vm_precise_percent_str) &&
+	    stress_get_setting("vm-precise-duration", &vm_precise_duration)) {
+		
+		/* Parse percentage string */
+		if (vm_precise_percent_str) {
+			vm_precise_percent = atof(vm_precise_percent_str);
+		}
+		
+		if (vm_precise_percent > 0.0 && vm_precise_percent <= 95.0 && vm_precise_duration > 0) {
+			use_precise_mode = true;
+			if (stress_instance_zero(args)) {
+				pr_inf("%s: using precise memory control mode: %.1f%% for %" PRIu64 " seconds\n",
+					args->name, vm_precise_percent, vm_precise_duration);
+			}
+		} else {
+			if (stress_instance_zero(args)) {
+				pr_err("%s: invalid precise memory parameters: percent=%.1f (must be 0.1-95.0), duration=%" PRIu64 " (must be >0)\n",
+					args->name, vm_precise_percent, vm_precise_duration);
+			}
+			return EXIT_FAILURE;
+		}
+	}
+
+	/* If using precise mode, delegate to precise memory control function */
+	if (use_precise_mode) {
+		return stress_vm_precise(args, vm_precise_percent, vm_precise_duration);
+	}
 	stress_vm_get_cache_line_size();
 
 	(void)stress_get_setting("vm-numa", &context.vm_numa);
@@ -3811,6 +3853,135 @@ static int stress_vm(stress_args_t *args)
 	return ret;
 }
 
+/*
+ * stress_vm_precise()
+ *     Precise memory control implementation
+ */
+static int stress_vm_precise(stress_args_t *args, double target_percent, uint64_t duration_seconds)
+{
+	precise_control_context_t ctx;
+	uint64_t current_time, end_time;
+	int ret = EXIT_SUCCESS;
+	bool stabilization_complete = false;
+	
+	/* Initialize precise memory control context */
+	if (precise_control_context_init(&ctx, target_percent, duration_seconds, 5.0) != 0) {
+		pr_err("%s: failed to initialize precise memory control\n", args->name);
+		return EXIT_FAILURE;
+	}
+	
+	if (stress_instance_zero(args)) {
+		pr_inf("%s: target memory usage: %.1f%% (%" PRIu64 " bytes)\n",
+			args->name, target_percent, ctx.target_bytes);
+		pr_inf("%s: total system memory: %.2f GB\n",
+			args->name, (double)ctx.total_memory / (1024.0 * 1024.0 * 1024.0));
+	}
+	
+	stress_set_proc_state(args->name, STRESS_STATE_SYNC_WAIT);
+	stress_sync_start_wait(args);
+	stress_set_proc_state(args->name, STRESS_STATE_RUN);
+	
+	/* Phase 1: Stabilization phase */
+	log_phase_transition(&ctx, "stabilization");
+	
+	while (stress_continue_flag() && !stabilization_complete) {
+		/* Adjust memory allocation */
+		if (adjust_memory_allocation(&ctx) != 0) {
+			if (stress_instance_zero(args)) {
+				pr_dbg("%s: memory allocation adjustment failed\n", args->name);
+			}
+		}
+		
+		/* Check stabilization */
+		stabilization_complete = check_stabilization(&ctx);
+		
+		/* Sleep for monitoring interval */
+		(void)shim_usleep(ctx.stab_config.monitor_interval_ms * 1000);
+		
+		/* Update bogo ops */
+		stress_bogo_inc(args);
+	}
+	
+	if (!stress_continue_flag()) {
+		ret = EXIT_SUCCESS;
+		goto cleanup;
+	}
+	
+	/* Phase 2: Stable period */
+	if (ctx.is_stabilized) {
+		log_phase_transition(&ctx, "stable_period");
+		
+		if (stress_instance_zero(args)) {
+			pr_inf("%s: stabilization achieved, entering stable period for %" PRIu64 " seconds\n",
+				args->name, duration_seconds);
+		}
+		
+		end_time = get_current_timestamp_us() + (duration_seconds * 1000000ULL);
+		
+		while (stress_continue_flag()) {
+			current_time = get_current_timestamp_us();
+			if (current_time >= end_time) {
+				break;
+			}
+			
+			/* Continue monitoring and adjusting during stable period */
+			if (adjust_memory_allocation(&ctx) != 0) {
+				if (stress_instance_zero(args)) {
+					pr_dbg("%s: memory allocation adjustment failed during stable period\n", args->name);
+				}
+			}
+			
+			/* Update stable period statistics */
+			if (get_system_memory_info(&ctx.current_info) == 0) {
+				ctx.stats.stable_sample_count++;
+				double deviation = fabs(ctx.current_info.usage_percentage - ctx.target_percentage);
+				if (deviation <= ctx.accuracy_threshold) {
+					ctx.stats.stable_within_threshold_count++;
+				}
+			}
+			
+			/* Sleep for monitoring interval */
+			(void)shim_usleep(ctx.stab_config.monitor_interval_ms * 1000);
+			
+			/* Update bogo ops */
+			stress_bogo_inc(args);
+		}
+		
+		ctx.stats.stable_period_end = get_current_timestamp_us();
+	}
+	
+	/* Phase 3: Cleanup phase */
+	log_phase_transition(&ctx, "cleanup");
+	ctx.stats.end_time = get_current_timestamp_us();
+	
+	/* Calculate and log final statistics */
+	log_final_statistics(&ctx);
+	
+	if (stress_instance_zero(args)) {
+		double total_duration = (double)(ctx.stats.end_time - ctx.stats.start_time) / 1000000.0;
+		double avg_usage = 0.0;
+		
+		if (ctx.stats.total_sample_count > 0) {
+			avg_usage = ctx.stats.sum_usage_percentage / (double)ctx.stats.total_sample_count;
+		}
+		
+		pr_inf("%s: completed in %.2f seconds\n", args->name, total_duration);
+		pr_inf("%s: average memory usage: %.2f%% (target: %.1f%%)\n", 
+			args->name, avg_usage, target_percent);
+		pr_inf("%s: accuracy: %.1f%% of samples within threshold\n",
+			args->name, ctx.stats.overall_accuracy_percentage);
+		
+		if (ctx.stats.stable_sample_count > 0) {
+			pr_inf("%s: stable period accuracy: %.1f%% of samples within threshold\n",
+				args->name, ctx.stats.stable_period_accuracy_percentage);
+		}
+	}
+
+cleanup:
+	precise_control_context_cleanup(&ctx);
+	return ret;
+}
+
 static const char *stress_vm_madvise(const size_t i)
 {
 	return (i < SIZEOF_ARRAY(vm_madvise_info)) ? vm_madvise_info[i].name : NULL;
@@ -3831,6 +4002,8 @@ static const stress_opt_t opts[] = {
 	{ OPT_vm_method,   "vm-method",   TYPE_ID_SIZE_T_METHOD, 0, 0, (void *)stress_vm_method },
 	{ OPT_vm_numa,	   "vm-numa",	  TYPE_ID_BOOL, 0, 1, NULL },
 	{ OPT_vm_populate, "vm-populate", TYPE_ID_BOOL, 0, 1, NULL },
+	{ OPT_vm_precise_percent, "vm-precise-percent", TYPE_ID_STR, 0, 0, NULL },
+	{ OPT_vm_precise_duration, "vm-precise-duration", TYPE_ID_UINT64, 1, 3600, NULL },
 	END_OPT,
 };
 

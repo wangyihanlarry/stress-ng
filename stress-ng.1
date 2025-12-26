@@ -9922,6 +9922,21 @@ stop vm workers after N bogo operations.
 populate (prefault) page tables for the memory mappings; this can stress
 swapping. Only available on systems that support MAP_POPULATE (since Linux
 2.5.46).
+.TP
+.B \-\-vm\-precise\-percent N
+enable precise memory control mode and set the target system memory usage
+percentage to N%. The vm stressor will adjust memory allocation to achieve
+and maintain the specified percentage of total system memory usage. Valid
+range is 0.0 to 95.0. This option requires \-\-vm\-precise\-duration to be
+specified. The feature includes automatic stabilization detection and
+maintains the target usage within 5% accuracy.
+.TP
+.B \-\-vm\-precise\-duration N
+specify the duration in seconds to maintain the target memory usage percentage
+after stabilization is achieved. This option must be used together with
+\-\-vm\-precise\-percent. The stressor will first stabilize to the target
+percentage, then maintain it for the specified duration before cleanup.
+During the stable period, detailed statistics are collected and reported.
 .RE
 .TP
 .B Virtual memory addressing stressor
@@ -10648,6 +10663,18 @@ run virtual memory stressors on 2 times the number of online cpus for 1 hour.
 .IP
 runs for 60 seconds with 4 cpu stressors, 2 io stressors and 1 vm stressor
 using 1 GB of virtual memory.
+.LP
+\f[CR]stress\-ng \-\-vm 1 \-\-vm\-precise\-percent 75.0 \-\-vm\-precise\-duration 30 \-\-timeout 60s\f[]
+.IP
+runs the vm stressor with precise memory control to achieve and maintain 75%
+system memory usage for 30 seconds, with automatic stabilization detection
+and detailed statistics reporting.
+.LP
+\f[CR]stress\-ng \-\-vm 1 \-\-vm\-precise\-percent 60.0 \-\-vm\-precise\-duration 120 \-\-timeout 180s\f[]
+.IP
+runs the vm stressor with precise memory control to achieve and maintain 60%
+system memory usage for 2 minutes, allowing up to 3 minutes total runtime
+including stabilization and cleanup phases.
 .LP
 \f[CR]stress\-ng \-\-iomix 2 \-\-iomix\-bytes 10% -t 10m\f[]
 .IP

@@ -1760,6 +1760,8 @@ typedef enum {
 	OPT_vm_madvise,
 	OPT_vm_method,
 	OPT_vm_numa,
+	OPT_vm_precise_percent,
+	OPT_vm_precise_duration,
 
 	OPT_vm_addr,
 	OPT_vm_addr_method,

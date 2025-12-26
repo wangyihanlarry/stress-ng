@@ -1267,6 +1267,8 @@ const struct option stress_long_options[] = {
 #if defined(MAP_POPULATE)
 	{ "vm-populate",	0,	0,	OPT_vm_populate },
 #endif
+	{ "vm-precise-percent",	1,	0,	OPT_vm_precise_percent },
+	{ "vm-precise-duration", 1,	0,	OPT_vm_precise_duration },
 	{ "vm-addr",		1,	0,	OPT_vm_addr },
 	{ "vm-addr-method",	1,	0,	OPT_vm_addr_method },
 	{ "vm-addr-mlock",	0,	0,	OPT_vm_addr_mlock },
